@@ -116,6 +116,15 @@ def load_tf_weights_in_gpt2(model, config, gpt2_checkpoint_path):
         pointer.data = torch.from_numpy(array)
     return model
 
+def mask_inverse(block_size):
+    start, unit_size, remove = 4, 3, 2
+
+    mask = torch.tril(torch.ones((block_size, block_size), dtype=torch.uint8))
+    for i in range(start, block_size, unit_size):
+        for j in range(1, remove + 1):
+            mask[i, i - j] = 0
+    return mask.view(1, 1, block_size, block_size)
+
 
 class Attention(nn.Module):
     def __init__(self, nx, n_ctx, config, scale=False, is_cross_attention=False):
@@ -126,6 +135,10 @@ class Attention(nn.Module):
         assert n_state % config.n_head == 0
         self.register_buffer(
             "bias", torch.tril(torch.ones((n_ctx, n_ctx), dtype=torch.uint8)).view(1, 1, n_ctx, n_ctx)
+        )
+        self.register_buffer("inverse_mask", mask_inverse(n_ctx))
+        self.register_buffer(
+            "full", torch.ones((n_ctx, n_ctx), dtype=torch.uint8).view(1, 1, n_ctx, n_ctx)
         )
         self.register_buffer("masked_bias", torch.tensor(-1e4))
         self.n_head = config.n_head
@@ -159,7 +172,7 @@ class Attention(nn.Module):
         self.n_head = self.n_head - len(heads)
         self.pruned_heads = self.pruned_heads.union(heads)
 
-    def _attn(self, q, k, v, attention_mask=None, head_mask=None, output_attentions=False):
+    def _attn(self, q, k, v, attention_mask=None, head_mask=None, output_attentions=False, attn_type='causal'):
         w = torch.matmul(q, k)
         if self.scale:
             w = w / (float(v.size(-1)) ** 0.5)
@@ -167,9 +180,19 @@ class Attention(nn.Module):
 
         if not self.is_cross_attention:
             # if only "normal" attention layer implements causal mask
-            mask = self.bias[:, :, ns - nd: ns, :ns]
+            if attn_type == 'causal':
+                mask = self.bias[:, :, ns - nd: ns, :ns]
+            elif attn_type == 'inverse':
+                mask = self.inverse_mask[:, :, ns - nd: ns, :ns]
+            elif attn_type == 'full':
+                mask = self.full[:, :, ns - nd: ns, :ns]
+            else:
+                assert "mask type not implemented"
+            # if attn_type == 'full':
+            #     torch.set_printoptions(profile="full")
+            #     print("mask", mask)
+            #     print(stop)
             w = torch.where(mask.bool(), w, self.masked_bias.to(w.dtype))
-
         if attention_mask is not None:
             # Apply the attention mask
             w = w + attention_mask
@@ -209,6 +232,7 @@ class Attention(nn.Module):
             encoder_attention_mask=None,
             use_cache=False,
             output_attentions=False,
+            attn_type='causal'
     ):
         if encoder_hidden_states is not None:
             assert hasattr(
@@ -233,7 +257,7 @@ class Attention(nn.Module):
         else:
             present = (None,)
 
-        attn_outputs = self._attn(query, key, value, attention_mask, head_mask, output_attentions)
+        attn_outputs = self._attn(query, key, value, attention_mask, head_mask, output_attentions, attn_type=attn_type)
         a = attn_outputs[0]
 
         a = self.merge_heads(a)
@@ -299,6 +323,7 @@ class Block(nn.Module):
             encoder_attention_mask=None,
             use_cache=False,
             output_attentions=False,
+            attn_type='causal'
     ):
         attn_outputs = self.attn(
             self.ln_1(hidden_states),
@@ -307,6 +332,7 @@ class Block(nn.Module):
             head_mask=head_mask,
             use_cache=use_cache,
             output_attentions=output_attentions,
+            attn_type=attn_type
         )
         attn_output = attn_outputs[0]  # output_attn: a, present, (attentions)
         outputs = attn_outputs[1:]
@@ -604,6 +630,7 @@ class GPT2Model(GPT2PreTrainedModel):
             output_attentions=None,
             output_hidden_states=None,
             return_dict=None,
+            attn_type='causal'
     ):
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -739,6 +766,7 @@ class GPT2Model(GPT2PreTrainedModel):
                     encoder_attention_mask=encoder_attention_mask,
                     use_cache=use_cache,
                     output_attentions=output_attentions,
+                    attn_type=attn_type
                 )
 
             hidden_states, present = outputs[:2]

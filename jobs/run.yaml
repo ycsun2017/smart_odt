@@ -1,0 +1,55 @@
+description: Train Online DT
+
+target:
+  service: aml
+  name: yanchao-cluster-2xv100
+
+environment:
+  registry: commondockerimages.azurecr.io
+  username: commondockerimages
+  image: atari_pretrain:odt
+
+  setup:
+    - pip install -e . 
+    - pip install azureml-core
+    - pip install git+https://github.com/rail-berkeley/d4rl@master#egg=d4rl 
+
+code:
+  local_dir: $CONFIG_DIR/../
+
+storage:
+  input:
+    storage_account_name: compassresearch
+    container_name: yanchao
+  output:
+    storage_account_name: compassresearch
+    container_name: yanchao
+  external:
+    storage_account_name: compassresearch
+    container_name: yanchao
+    mount_dir: /mnt/yanchao
+
+# some environment variables to ease up setting of jobs
+env_defaults:
+  NUM_NODES: 1
+  NUM_GPUS: 2
+  ENV: hopper-medium-v2
+  SEED: 1
+
+jobs:
+
+  - name: odt_s${SEED}
+    sku: ${NUM_NODES}xG${NUM_GPUS}
+    process_count_per_node: ${NUM_GPUS}
+    submit_args:
+      container_args:
+        shm_size: 650g
+      env: { AZUREML_COMPUTE_USE_COMMON_RUNTIME: True }
+    command:
+      - export MUJOCO_GL=egl
+      - export MKL_THREADING_LAYER="GNU" 
+      - mkdir /root/.mujoco && mv mujoco210 /root/.mujoco
+      - export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
+      - python main.py --env ${ENV} --seed ${SEED}
+      # - export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:/usr/lib/nvidia
+      
