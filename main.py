@@ -14,6 +14,7 @@ import gym
 import d4rl
 import torch
 import numpy as np
+import os 
 
 import utils
 from replay_buffer import ReplayBuffer
@@ -25,13 +26,24 @@ from decision_transformer.models.decision_transformer import DecisionTransformer
 from evaluation import create_vec_eval_episodes_fn, vec_evaluate_episode_rtg
 from trainer import SequenceTrainer
 from logger import Logger
+import torch.multiprocessing as mp
+import torch.distributed as dist
 
 MAX_EPISODE_LEN = 1000
 
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+
+    # initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
 
 class Experiment:
     def __init__(self, variant):
-
+        self.variant = variant
         self.state_dim, self.act_dim, self.action_range = self._get_env_spec(variant)
         self.offline_trajs, self.state_mean, self.state_std = self._load_dataset(
             variant["env"]
@@ -62,7 +74,15 @@ class Experiment:
             ordering=variant["ordering"],
             init_temperature=variant["init_temperature"],
             target_entropy=self.target_entropy,
-        ).to(device=self.device)
+        ).to(self.device)
+
+        # if torch.cuda.is_available():
+        #     self.device = "cuda"
+        #     self.model = torch.nn.parallel.DistributedDataParallel(self.model).cuda()
+        #     print("device count", torch.cuda.device_count())
+        #     self.raw_model = self.model.module
+        # else:
+        #     self.raw_model = self.model
 
         self.optimizer = Lamb(
             self.model.parameters(),
@@ -85,7 +105,6 @@ class Experiment:
         self.pretrain_iter = 0
         self.online_iter = 0
         self.total_transitions_sampled = 0
-        self.variant = variant
         self.reward_scale = 1.0 if "antmaze" in variant["env"] else 0.001
         self.logger = Logger(variant)
 
@@ -143,8 +162,12 @@ class Experiment:
             print(f"Model loaded at {path_prefix}/model.pt")
 
     def _load_dataset(self, env_name):
-
-        dataset_path = f"./data/{env_name}.pkl"
+        if self.variant['amlt']:
+            root = os.environ["AMLT_DATA_DIR"] 
+            dataset_path = f"{root}/{env_name}.pkl"
+        else:
+            dataset_path = f"./data/{env_name}.pkl"
+            
         with open(dataset_path, "rb") as f:
             trajectories = pickle.load(f)
 
@@ -385,7 +408,7 @@ class Experiment:
 
     def __call__(self):
 
-        utils.set_seed_everywhere(args.seed)
+        # utils.set_seed_everywhere(args.seed)
 
         import d4rl
 
@@ -462,12 +485,26 @@ class Experiment:
 
         eval_envs.close()
 
+    
+def run_ddp(rank, world_size, args):
+    print(f"Running basic DDP example on rank {rank}.")
+    setup(rank, world_size)
+
+    # args = parser.parse_args()
+    utils.set_seed_everywhere(args.seed)
+    experiment = Experiment(vars(args))
+
+    print("=" * 50)
+
+    experiment()
+
+    cleanup()
+    print('done!')
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=10)
     parser.add_argument("--env", type=str, default="hopper-medium-v2")
-
     # model options
     parser.add_argument("--K", type=int, default=20)
     parser.add_argument("--embed_dim", type=int, default=512)
@@ -508,10 +545,21 @@ if __name__ == "__main__":
     parser.add_argument("--save_dir", type=str, default="./exp")
     parser.add_argument("--exp_name", type=str, default="default")
 
+    parser.add_argument("--amlt", default=False, action="store_true", help="whether runing by amlt")
+    parser.add_argument("--parallel", default=False, action="store_true")
+
     args = parser.parse_args()
 
     utils.set_seed_everywhere(args.seed)
     experiment = Experiment(vars(args))
 
     print("=" * 50)
+
     experiment()
+
+
+    # world_size = 2
+    # mp.spawn(run_ddp,
+    #         args=(world_size, args),
+    #         nprocs=world_size,
+    #         join=True)

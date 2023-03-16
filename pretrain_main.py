@@ -14,6 +14,7 @@ import gym
 import d4rl
 import torch
 import numpy as np
+import os
 
 import utils
 from replay_buffer import ReplayBuffer
@@ -23,7 +24,7 @@ from pathlib import Path
 from data import create_dataloader
 from decision_transformer.models.pretrain_decision_transformer import PretrainDecisionTransformer
 from evaluation import create_vec_eval_episodes_fn, vec_evaluate_episode_rtg
-from trainer import SequenceTrainer
+from pretrain_trainer import PretrainSequenceTrainer
 from logger import Logger
 
 MAX_EPISODE_LEN = 1000
@@ -31,7 +32,7 @@ MAX_EPISODE_LEN = 1000
 
 class Experiment:
     def __init__(self, variant):
-
+        self.variant = variant
         self.state_dim, self.act_dim, self.action_range = self._get_env_spec(variant)
         self.offline_trajs, self.state_mean, self.state_std = self._load_dataset(
             variant["env"]
@@ -85,7 +86,6 @@ class Experiment:
         self.pretrain_iter = 0
         self.online_iter = 0
         self.total_transitions_sampled = 0
-        self.variant = variant
         self.reward_scale = 1.0 if "antmaze" in variant["env"] else 0.001
         self.logger = Logger(variant)
 
@@ -101,8 +101,9 @@ class Experiment:
         return state_dim, act_dim, action_range
 
     def _save_model(self, path_prefix, is_pretrain_model=False):
+        model_dict = self.model.state_dict()
         to_save = {
-            "model_state_dict": self.model.state_dict(),
+            "model_state_dict": model_dict,
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict(),
             "pretrain_iter": self.pretrain_iter,
@@ -144,7 +145,12 @@ class Experiment:
 
     def _load_dataset(self, env_name):
 
-        dataset_path = f"./data/{env_name}.pkl"
+        if self.variant['amlt']:
+            root = os.environ["AMLT_DATA_DIR"] 
+            dataset_path = f"{root}/{env_name}.pkl"
+        else:
+            dataset_path = f"./data/{env_name}.pkl"
+
         with open(dataset_path, "rb") as f:
             trajectories = pickle.load(f)
 
@@ -237,7 +243,7 @@ class Experiment:
             )
         ]
 
-        trainer = SequenceTrainer(
+        trainer = PretrainSequenceTrainer(
             model=self.model,
             optimizer=self.optimizer,
             log_temperature_optimizer=self.log_temperature_optimizer,
@@ -263,6 +269,7 @@ class Experiment:
                 action_range=self.action_range,
             )
             train_weights={
+                'dt': self.variant["dt_weight"],
                 'forward': self.variant["forward_weight"],
                 'inverse': self.variant["inverse_weight"],
                 'reward': self.variant["reward_weight"],
@@ -307,7 +314,7 @@ class Experiment:
 
         print("\n\n\n*** Online Finetuning ***")
 
-        trainer = SequenceTrainer(
+        trainer = PretrainSequenceTrainer(
             model=self.model,
             optimizer=self.optimizer,
             log_temperature_optimizer=self.log_temperature_optimizer,
@@ -362,10 +369,24 @@ class Experiment:
             else:
                 evaluation = False
 
-            train_outputs = trainer.train_iteration(
-                loss_fn=loss_fn,
-                dataloader=dataloader,
-            )
+            if self.variant["auxiliary"]:
+                train_weights={
+                    'dt': self.variant["dt_weight"],
+                    'forward': 0.1,
+                    'inverse': 0.1,
+                    'reward': 0.1,
+                    'randinv': 0.1,
+                }
+                train_outputs = trainer.unsup_train_iteration(
+                    loss_fn=loss_fn,
+                    dataloader=dataloader,
+                    train_weights=train_weights
+                )
+            else:
+                train_outputs = trainer.train_iteration(
+                    loss_fn=loss_fn,
+                    dataloader=dataloader,
+                )
             outputs.update(train_outputs)
 
             if evaluation:
@@ -515,10 +536,15 @@ if __name__ == "__main__":
     parser.add_argument("--exp_name", type=str, default="default")
 
     # pretrain options
+    parser.add_argument("--dt_weight", type=float, default=1)
     parser.add_argument("--forward_weight", type=float, default=1)
     parser.add_argument("--inverse_weight", type=float, default=1)
     parser.add_argument("--reward_weight", type=float, default=1)
     parser.add_argument("--randinv_weight", type=float, default=1)
+
+    parser.add_argument("--amlt", default=False, action="store_true", help="whether runing by amlt")
+    parser.add_argument("--parallel", default=False, action="store_true")
+    parser.add_argument("--auxiliary", default=False, action="store_true")
 
     args = parser.parse_args()
 

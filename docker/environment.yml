@@ -41,7 +41,7 @@ dependencies:
     - google-auth==1.35.0
     - google-auth-oauthlib==0.4.6
     - grpcio==1.48.1
-    - gym==0.24.1
+    - gym==0.23.1
     - gym-notices==0.0.8
     - h5py==3.7.0
     - idna==3.3

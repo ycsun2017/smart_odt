@@ -1,0 +1,158 @@
+description: Train Online DT
+
+target:
+  service: aml
+  name: yanchao-cluster-1v100
+
+environment:
+  registry: commondockerimages.azurecr.io
+  username: commondockerimages
+  image: atari_pretrain:odt
+
+  setup:
+    - pip install -e . 
+    - pip install azureml-core
+    - pip install git+https://github.com/rail-berkeley/d4rl@master#egg=d4rl 
+    - pip install gym==0.23.1
+
+code:
+  local_dir: $CONFIG_DIR/../
+
+storage:
+  input:
+    storage_account_name: compassresearch
+    container_name: yanchao
+  output:
+    storage_account_name: compassresearch
+    container_name: yanchao
+  external:
+    storage_account_name: compassresearch
+    container_name: yanchao
+    mount_dir: /mnt/yanchao
+
+data:
+  storage_id: external
+  remote_dir: offline_data/d4rl_gym/data
+
+# some environment variables to ease up setting of jobs
+env_defaults:
+  NUM_NODES: 1
+  NUM_GPUS: 1
+  ENV: walker2d-medium-v2
+  SEED: 1
+  ITER: 5
+  LR: 1e-3
+  WD: 1e-3
+  ERTG: 5000
+  ORTG: 10000
+  ECL: 5
+
+jobs:
+
+  - name: odt_iter${ITER}_s${SEED}
+    sku: ${NUM_NODES}xG${NUM_GPUS}
+    process_count_per_node: ${NUM_GPUS}
+    submit_args:
+      container_args:
+        shm_size: 650g
+      env: { AZUREML_COMPUTE_USE_COMMON_RUNTIME: True }
+    command:
+      - export MUJOCO_GL=egl
+      - export MKL_THREADING_LAYER="GNU" 
+      - mkdir /root/.mujoco && cp -r mujoco210 /root/.mujoco
+      - export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
+      - python main.py --amlt --env ${ENV} --seed ${SEED} --batch_size 128 
+        --max_pretrain_iters ${ITER}
+        --learning_rate ${LR} --weight_decay ${WD} 
+        --eval_rtg ${ERTG} --online_rtg ${ORTG}
+        --eval_context_length ${ECL}
+        
+  
+  # - name: ourodt_unsup_iter${ITER}_s${SEED}
+  #   sku: ${NUM_NODES}xG${NUM_GPUS}
+  #   process_count_per_node: ${NUM_GPUS}
+  #   submit_args:
+  #     container_args:
+  #       shm_size: 650g
+  #     env: { AZUREML_COMPUTE_USE_COMMON_RUNTIME: True }
+  #   command:
+  #     - export MUJOCO_GL=egl
+  #     - export MKL_THREADING_LAYER="GNU" 
+  #     - mkdir /root/.mujoco && cp -r mujoco210 /root/.mujoco
+  #     - export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
+  #     - python pretrain_main.py --amlt --env ${ENV} --seed ${SEED} --batch_size 128
+  #       --max_pretrain_iters ${ITER}
+  #       --reward_weight 0 --dt_weight 0 
+  #       --learning_rate ${LR} --weight_decay ${WD} 
+  #       --eval_rtg ${ERTG} --online_rtg ${ORTG}
+  #       --eval_context_length ${ECL}
+  
+  # - name: ourodt_sup_nofor_s${SEED}
+  #   sku: ${NUM_NODES}xG${NUM_GPUS}
+  #   process_count_per_node: ${NUM_GPUS}
+  #   submit_args:
+  #     container_args:
+  #       shm_size: 650g
+  #     env: { AZUREML_COMPUTE_USE_COMMON_RUNTIME: True }
+  #   command:
+  #     - export MUJOCO_GL=egl
+  #     - export MKL_THREADING_LAYER="GNU" 
+  #     - mkdir /root/.mujoco && cp -r mujoco210 /root/.mujoco
+  #     - export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
+  #     - python pretrain_main.py --amlt --env ${ENV} --seed ${SEED} --batch_size 128
+  #       --pretrain_env ${PRETRAIN_ENV} --max_pretrain_iters ${ITER} --forward_weight 0 
+  
+  # - name: ourodt_rdinv_iter${ITER}_s${SEED}
+  #   sku: ${NUM_NODES}xG${NUM_GPUS}
+  #   process_count_per_node: ${NUM_GPUS}
+  #   submit_args:
+  #     container_args:
+  #       shm_size: 650g
+  #     env: { AZUREML_COMPUTE_USE_COMMON_RUNTIME: True }
+  #   command:
+  #     - export MUJOCO_GL=egl
+  #     - export MKL_THREADING_LAYER="GNU" 
+  #     - mkdir /root/.mujoco && cp -r mujoco210 /root/.mujoco
+  #     - export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
+  #     - python pretrain_main.py --amlt --env ${ENV} --seed ${SEED} --batch_size 128
+  #       --max_pretrain_iters ${ITER}
+  #       --forward_weight 0 --inverse_weight 0 
+  #       --learning_rate ${LR} --weight_decay ${WD} 
+  #       --eval_rtg ${ERTG} --online_rtg ${ORTG}
+  #       --eval_context_length ${ECL}
+  
+  - name: ourodt_sup_iter${ITER}_s${SEED}
+    sku: ${NUM_NODES}xG${NUM_GPUS}
+    process_count_per_node: ${NUM_GPUS}
+    submit_args:
+      container_args:
+        shm_size: 650g
+      env: { AZUREML_COMPUTE_USE_COMMON_RUNTIME: True }
+    command:
+      - export MUJOCO_GL=egl
+      - export MKL_THREADING_LAYER="GNU" 
+      - mkdir /root/.mujoco && cp -r mujoco210 /root/.mujoco
+      - export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
+      - python pretrain_main.py --amlt --env ${ENV} --seed ${SEED} --batch_size 128
+        --max_pretrain_iters ${ITER}
+        --learning_rate ${LR} --weight_decay ${WD} 
+        --eval_rtg ${ERTG} --online_rtg ${ORTG}
+        --eval_context_length ${ECL}
+  
+  - name: ourodt_supaux_iter${ITER}_s${SEED}
+    sku: ${NUM_NODES}xG${NUM_GPUS}
+    process_count_per_node: ${NUM_GPUS}
+    submit_args:
+      container_args:
+        shm_size: 650g
+      env: { AZUREML_COMPUTE_USE_COMMON_RUNTIME: True }
+    command:
+      - export MUJOCO_GL=egl
+      - export MKL_THREADING_LAYER="GNU" 
+      - mkdir /root/.mujoco && cp -r mujoco210 /root/.mujoco
+      - export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
+      - python pretrain_main.py --amlt --env ${ENV} --seed ${SEED} --batch_size 128
+        --max_pretrain_iters ${ITER} --auxiliary
+        --learning_rate ${LR} --weight_decay ${WD} 
+        --eval_rtg ${ERTG} --online_rtg ${ORTG}
+        --eval_context_length ${ECL}

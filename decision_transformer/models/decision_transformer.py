@@ -22,7 +22,7 @@ import math
 import numpy as np
 import torch.nn.functional as F
 from torch import distributions as pyd
-
+from collections import OrderedDict
 
 class TanhTransform(pyd.transforms.Transform):
     domain = pyd.constraints.real

@@ -1,0 +1,1 @@
+{"project_name": "online_dt", "storage_account_name": "compassresearch", "container_name": "yanchao", "blob_storage_account_name": "compassresearch", "registry_name": "online_dt", "local_path": "/data2/pretrain/online-dt", "default_output_dir": "/data2/pretrain/online-dt/amlt", "project_uuid": "7337082375.56178-ab65225a-a02b-4b57-be8c-9112ee8f8381", "version": "9.5.3"}
